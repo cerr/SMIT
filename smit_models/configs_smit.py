@@ -2,12 +2,14 @@
 
 import ml_collections
 
-
-def get_SMIT_128_bias_True():
+def get_SMIT_128_bias_True(depths=(2, 2, 12, 2), use_encoder5=True,
+                           img_size=(128, 128, 128), decoder_type='unetr'):
     '''
     A Large TransMorph Network
     '''
+
     config = ml_collections.ConfigDict()
+
     config.if_transskip = True
     config.if_convskip = True
     config.patch_size = 2
@@ -31,6 +33,11 @@ def get_SMIT_128_bias_True():
     config.out_indices = (0, 1, 2, 3)
     config.reg_head_chan = 16
     config.img_size = (128, 128, 128)
+
+    config.depths = depths
+    config.use_encoder5 = use_encoder5
+    config.img_size = img_size
+    config.decoder_type = decoder_type
     return config
 
 
