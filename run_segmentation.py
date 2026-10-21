@@ -1,11 +1,12 @@
 import os
+import json
 import numpy as np
 import sys
 import argparse
 import nibabel as nib
 import SimpleITK as sitk
 from skimage.measure import label
-import scipy.ndimage.morphology as snm
+import scipy.ndimage as snm
 
 import torch
 import torch.distributed as dist
@@ -20,16 +21,111 @@ from monai.inferers import sliding_window_inference
 
 from smit_models import configs_smit, smit, smit_plus
 from utils.gen_data_json import main as gen_data_json
+from utils import dicom_io
+from model_registry import load_registry, weights_path, missing_weights_message, verify_weights
 
 
-NETWORK_CONFIGS = {
-    'CT_HeartSubstruct_SMIT':  dict(depths=(2, 2, 12, 2), use_encoder5=False),
-    'CT_HN_SMIT':     dict(depths=(2, 2, 8, 2),  use_encoder5=False, feature_size=128),
-    'CT_Lung_SMIT':   dict(depths=(2, 2, 8, 2),  use_encoder5=False),
-    'MR_Rectum_GTV_SMIT': dict(depths=(2, 2, 12, 2), use_encoder5=True),
-}
+# Model registry (models.yaml): network settings, preprocessing / inference defaults, labels, weights
+MODEL_REGISTRY = load_registry()
+MODEL_LIST = list(MODEL_REGISTRY.keys())
 
-MODEL_LIST = list(NETWORK_CONFIGS.keys())
+
+def registry_defaults(name):
+    """Command-line defaults for a model from models.yaml (options given on the command line still win)."""
+    e = MODEL_REGISTRY[name]
+    d = {'use_smit': 1 if e['network']['arch'] == 'smit' else 0}
+    if 'out_channels' in e:
+        d['out_channels'] = e['out_channels']
+    pre = e.get('preprocessing', {})
+    if 'hu_window' in pre:
+        d['a_min'], d['a_max'] = pre['hu_window']
+    if 'spacing_mm' in pre:
+        d['space_x'], d['space_y'], d['space_z'] = pre['spacing_mm']
+    inf = e.get('inference', {})
+    for key, arg in (('blend', 'blend'), ('overlap', 'infer_overlap'), ('sw_batch_size', 'sw_batch_size'),
+                     ('amp', 'amp'), ('body_mask', 'body_mask')):
+        if key in inf:
+            d[arg] = inf[key]
+    return d
+
+
+def print_models():
+    for name, e in MODEL_REGISTRY.items():
+        state = 'installed' if os.path.isfile(weights_path(name)) else 'not installed'
+        print(f"{name:28s} {e.get('status', ''):11s} {state:14s} {e.get('description', '')}")
+    print(f"\nWeights are installed as {weights_path('<MODEL>')} (see get_weights.py).")
+
+
+def select_device(choice):
+    """CUDA, Apple-silicon GPU (MPS) or CPU. For MPS, setting PYTORCH_ENABLE_MPS_FALLBACK=1 before
+    starting Python lets operations that MPS does not implement run on the CPU."""
+    mps_ok = getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+    if choice == "auto":
+        choice = "cuda" if torch.cuda.is_available() else ("mps" if mps_ok else "cpu")
+    if choice == "cuda" and not torch.cuda.is_available():
+        sys.exit("--device cuda requested but no CUDA GPU is available")
+    if choice == "mps" and not mps_ok:
+        sys.exit("--device mps requested but the Apple-silicon GPU (MPS) is not available")
+    return torch.device(choice)
+
+
+def prepare_dicom_input(args):
+    """For DICOM input, convert each series to NIfTI with pyCERR in <results_dir>/dicom_input_nifti and
+    point args.data_dir there. Returns {case name: (planC, scanNum)} for the RTSTRUCT export."""
+    fmt = args.input_format if args.input_format != 'auto' else dicom_io.detect_input_format(args.data_dir)
+    if fmt != 'dicom':
+        return {}
+    if args.distributed:
+        sys.exit("DICOM input is not supported with --distributed; run without it or convert to NIfTI first")
+    modality = MODEL_REGISTRY[args.model].get('modality', 'CT')
+    stage = os.path.join(args.results_dir, 'dicom_input_nifti')
+    os.makedirs(stage, exist_ok=True)
+    cases = {}
+    for folder in dicom_io.find_dicom_folders(args.data_dir):
+        name = dicom_io.case_name(folder, args.data_dir)
+        nii = os.path.join(stage, f'{name}.nii.gz')
+        print(f'Reading DICOM {folder}')
+        try:
+            cases[name] = dicom_io.dicom_to_nifti(folder, nii, modality)
+        except Exception as e:  # keep going with the other patients
+            print(f'Skipping {folder}: {e}')
+    if not cases:
+        sys.exit(f'No usable {modality} DICOM series found in {args.data_dir}')
+    args.data_dir, args.json_list = stage, 'data.json'
+    return cases
+
+
+def export_dicom_results(args, dicom_cases):
+    """Write an RTSTRUCT per DICOM case, referencing the scan it was segmented from."""
+    labels = MODEL_REGISTRY[args.model].get('labels') or \
+        {v: f'{args.model}_label{v}' for v in range(1, args.out_channels)}
+    for name, (planC, scanNum) in dicom_cases.items():
+        seg = os.path.join(args.results_dir, f'{name}_seg.nii.gz')
+        if not os.path.exists(seg):
+            continue
+        out = os.path.join(args.results_dir, f'{name}_{args.model}_RTSTRUCT.dcm')
+        print(f'Writing RTSTRUCT for {name} ...', flush=True)
+        written = dicom_io.export_rtstruct(seg, planC, scanNum, labels, out,
+                                           f'SMIT {args.model} - research use only')
+        if written:
+            print(f'Wrote {out}: {", ".join(written)}')
+
+
+def resolve_weights(args):
+    """Weights: --pretrained_model_path if given, else the installed weights/<MODEL>.pt.
+    A missing file is an error; the checksum in models.yaml is verified."""
+    entry = MODEL_REGISTRY[args.model]
+    explicit = args.pretrained_model_path is not None
+    path = args.pretrained_model_path if explicit else weights_path(args.model)
+    if not os.path.isfile(path):
+        sys.exit(f"Weights file not found: {path}" if explicit else missing_weights_message(args.model))
+    if not args.skip_checksum and not verify_weights(path, entry, quiet=not is_main_process(args)):
+        msg = (f"{path} does not match the {args.model} weights checksum in models.yaml "
+               f"(different version, or a corrupted download).")
+        if not explicit:
+            sys.exit(msg + " Re-install it with get_weights.py, or pass --skip_checksum to run anyway.")
+        print("Warning: " + msg)
+    return path
 
 def list_of_strings(arg):
     """Parse comma-separated string into list."""
@@ -43,8 +139,8 @@ def setup_argparser():
 
     # Data arguments
     parser.add_argument("--data_dir", default=None, type=str, help="dataset directory")
-    parser.add_argument('--json_list', default='/scratch/input/data.json',
-                        type=str, help='dataset json file')
+    parser.add_argument('--json_list', default='data.json', type=str,
+                        help='dataset json file in --data_dir (written automatically)')
     parser.add_argument("--datasets", default=['val'], type=list_of_strings,
                         help="comma-separated list of datasets to pull from json file")
     parser.add_argument("--results_dir", default='results', type=str, help="main output directory")
@@ -62,9 +158,17 @@ def setup_argparser():
     parser.add_argument("--body_mask", action="store_true")
 
     # Model arguments
-    parser.add_argument("--model", required=True, choices=MODEL_LIST,help="See MODEL_LIST.")
+    parser.add_argument("--model", choices=MODEL_LIST, help="model name from models.yaml (see --list_models)")
+    parser.add_argument("--list_models", action="store_true", help="list the models in models.yaml and exit")
+    parser.add_argument("--skip_checksum", action="store_true", help="do not verify the weights checksum")
+    parser.add_argument("--input_format", default="auto", choices=["auto", "nifti", "dicom"],
+                        help="auto: NIfTI files in --data_dir, else DICOM (a DICOM folder, or one sub-folder per patient)")
+    parser.add_argument("--no_rtstruct", action="store_true",
+                        help="for DICOM input, do not write the DICOM RTSTRUCT (NIfTI label maps are always written)")
+    parser.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"],
+                        help="auto = CUDA GPU, else Apple-silicon GPU (mps), else CPU")
     parser.add_argument("--pretrained_model_path", default=None, type=str,
-                        help="path to pretrained model checkpoint")
+                        help="checkpoint file to use instead of the installed weights/<MODEL>.pt")
     parser.add_argument('--model_feature', default=96, type=int, help='model_embedding_feature size')
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--in_channels", default=1, type=int, help="number of input channels")
@@ -174,7 +278,8 @@ class PercentileClipRescale(MapTransform):
 
 
 def create_transforms(args):
-    tlist = [transforms.LoadImaged(keys=["image"]),
+    # image_only=False keeps image_meta_dict (MONAI >= 1.3 defaults to image_only=True)
+    tlist = [transforms.LoadImaged(keys=["image"], image_only=False),
              transforms.EnsureChannelFirstd(keys=["image"])]
     if args.percentile_rescale:
         tlist.append(PercentileClipRescale(keys=["image"]))
@@ -253,10 +358,12 @@ def apply_postprocessing(pred_t, args):
 
 # Load model on device
 def load_model(args, device):
-    cfg = dict(NETWORK_CONFIGS[args.model])
+    cfg = MODEL_REGISTRY[args.model]['network']
     if args.use_smit:
         decoder_type = 'upernet' if args.use_upernet else 'unetr'
-        config = configs_smit.get_SMIT_128_bias_True(**cfg,
+        smit_cfg = {k: (tuple(cfg[k]) if k == 'depths' else cfg[k])
+                    for k in ('depths', 'use_encoder5') if k in cfg}
+        config = configs_smit.get_SMIT_128_bias_True(**smit_cfg,
                                                      decoder_type=decoder_type,
                                                      img_size=(args.roi_x, args.roi_y, args.roi_z))
         model = smit.SMIT_3D_Seg(config,
@@ -269,11 +376,14 @@ def load_model(args, device):
             img_size=args.roi_x,
             in_channels=args.in_channels,
             out_channels=args.out_channels,
-            feature_size=cfg['feature_size'],  # or add as arg
+            feature_size=cfg.get('feature_size', args.model_feature),
             norm_name=args.norm_name,
         )
 
-    checkpoint = torch.load(args.pretrained_model_path, map_location="cpu")
+    try:
+        checkpoint = torch.load(args.pretrained_model_path, map_location="cpu", weights_only=False)
+    except TypeError:  # torch < 1.13 has no weights_only argument
+        checkpoint = torch.load(args.pretrained_model_path, map_location="cpu")
     model_dict = checkpoint.get("state_dict", checkpoint)
 
     # Handle DDP state dict
@@ -281,6 +391,11 @@ def load_model(args, device):
     for k, v in model_dict.items():
         new_key = k.replace("module.", "") if k.startswith("module.") else k
         new_state_dict[new_key] = v
+
+    # Deep-supervision heads (ds_out*) are only used in training; drop them if the model has none
+    own_keys = set(model.state_dict().keys())
+    new_state_dict = {k: v for k, v in new_state_dict.items()
+                      if k in own_keys or not k.startswith('ds_out')}
 
     model.load_state_dict(new_state_dict, strict=True)
     model.eval()
@@ -385,11 +500,16 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
 
 def main():
     parser = setup_argparser()
+    known, _ = parser.parse_known_args()
+    if known.list_models:
+        print_models()
+        return
+    if known.model is None:
+        parser.error("--model is required (see --list_models)")
+    parser.set_defaults(**registry_defaults(known.model))
     args = parser.parse_args()
-
-    # Model path
-    args.pretrained_model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                              'model_final.pt')
+    args.pretrained_model_path = resolve_weights(args)
+    dicom_cases = prepare_dicom_input(args)
 
     # Generate data JSON
     gen_data_json(args.data_dir)
@@ -402,7 +522,7 @@ def main():
     if args.distributed:
         device = torch.device(f"cuda:{args.local_rank}")
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = select_device(args.device)
 
     if is_main_process(args):
         print("=" * 60)
@@ -424,9 +544,19 @@ def main():
     test_transform, post_transforms = create_transforms(args)
     for n in args.datasets:
         status = process_dataset(n, args, model, test_transform, post_transforms, device)
-        sys.exit(1) if status<0
+        if status < 0:
+            sys.exit(1)
 
     cleanup_distributed()
+
+    if dicom_cases and not args.no_rtstruct:
+        export_dicom_results(args, dicom_cases)
+
+    # Label names for the output label maps, from models.yaml
+    labels = MODEL_REGISTRY[args.model].get('labels')
+    if labels and is_main_process(args):
+        with open(os.path.join(args.results_dir, 'labels.json'), 'w') as f:
+            json.dump({'model': args.model, 'labels': {str(k): v for k, v in labels.items()}}, f, indent=2)
 
     if is_main_process(args):
         print("Inference completed successfully!")
