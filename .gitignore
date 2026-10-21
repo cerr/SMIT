@@ -1,0 +1,21 @@
+# Model weights are distributed separately (see README: "Getting model weights")
+weights/
+*.pt
+*.pth
+*.ckpt
+*.sha256.json
+model_final.pt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Data and outputs
+*.nii
+*.nii.gz
+*.dcm
+data.json
+results/

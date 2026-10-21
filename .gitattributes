@@ -1,0 +1,7 @@
+# Normalize line endings in the repository; check out with the platform's native endings
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+*.pt binary
+*.pth binary
+*.nii.gz binary
