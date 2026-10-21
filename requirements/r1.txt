@@ -1,6 +1,9 @@
-# PyTorch (installed first). Tested: torch 2.8.0 (cu129 build) with Python 3.12 on Windows.
-# The CUDA 12.6 build runs on NVIDIA drivers that support CUDA 12.x. For newer drivers
-# cu128 / cu129 also work; for CPU-only machines use https://download.pytorch.org/whl/cpu
---extra-index-url https://download.pytorch.org/whl/cu126
+# PyTorch (installed first, from PyTorch's own package index; kept in its own file so that index is used
+# only for torch and torchvision).
+# CUDA 12.8 build: NVIDIA GPUs from Pascal GTX 10-series (sm_61) to Blackwell (RTX 50-series,
+# RTX PRO Blackwell); needs an NVIDIA driver 570 or newer.
+# Older driver, or a Maxwell GPU / Tesla P100: use https://download.pytorch.org/whl/cu126 instead.
+# CPU only: https://download.pytorch.org/whl/cpu   macOS: install torch from the default index (see README).
+--extra-index-url https://download.pytorch.org/whl/cu128
 torch==2.8.0
 torchvision==0.23.0

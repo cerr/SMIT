@@ -4,7 +4,7 @@ models.yaml (next to this file) describes every model: network settings, preproc
 inference options, labels and the SHA-256 checksum of its weights.
 
 Weights are not stored in the repository; they are distributed separately and installed with
-get_weights.py as  weights/<MODEL>.pt  in this repository, e.g. weights/CT_ThoraxOARs_SMITplus.pt.
+get_weights.py as  weights/<MODEL>.safetensors  in this repository (older releases: weights/<MODEL>.pt).
 """
 import hashlib
 import json
@@ -23,9 +23,20 @@ def load_registry(path=REGISTRY_FILE):
     return reg['models']
 
 
-def weights_path(name):
-    """Where the weights for a model are installed: weights/<MODEL>.pt"""
-    return os.path.join(WEIGHTS_DIR, f'{name}.pt')
+WEIGHT_EXTS = ('.safetensors', '.pt')  # preferred first
+
+
+def weights_path(name, ext=None):
+    """Installed weights of a model: weights/<MODEL>.safetensors, else weights/<MODEL>.pt.
+    If neither exists, the .safetensors path (where get_weights.py installs current releases).
+    With ext, the path for that file type."""
+    if ext:
+        return os.path.join(WEIGHTS_DIR, f'{name}{ext}')
+    for e in WEIGHT_EXTS:
+        p = os.path.join(WEIGHTS_DIR, f'{name}{e}')
+        if os.path.isfile(p):
+            return p
+    return os.path.join(WEIGHTS_DIR, f'{name}{WEIGHT_EXTS[0]}')
 
 
 def sha256(path, chunk=1 << 22):

@@ -9,7 +9,7 @@ Thoracic organs at risk on CT and cone-beam CT (CBCT).
 | Intensity window | -750 to 1750 HU, scaled to [0, 1] |
 | Resampling | 1.5 x 1.5 x 2.0 mm, RAS orientation |
 | Inference | 128^3 patches, overlap 0.5, Gaussian blending, mixed precision; labels outside the body (-150 HU) removed |
-| Weights | `weights/CT_ThoraxOARs_SMITplus.pt`, installed with `get_weights.py` (checksum in `models.yaml`) |
+| Weights | `weights/CT_ThoraxOARs_SMITplus.safetensors`, installed with `get_weights.py` (checksum in `models.yaml`) |
 | GPU memory | about 8 GB peak (Quadro RTX 5000, sliding-window batch 1) |
 | Run time | about 45-60 s per CBCT on a Quadro RTX 5000, including loading the model |
 

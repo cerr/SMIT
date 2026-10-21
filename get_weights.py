@@ -1,8 +1,9 @@
 """Install weights for a SMIT model.
 
 Weights are shared separately from this repository (e.g. a Box link sent on request).
-This script downloads or copies them to weights/<MODEL>.pt in this repository
-(e.g. weights/CT_ThoraxOARs_SMITplus.pt) and verifies the SHA-256 checksum listed in models.yaml.
+This script downloads or copies them to weights/<MODEL>.safetensors in this repository
+(e.g. weights/CT_ThoraxOARs_SMITplus.safetensors; a PyTorch .pt checkpoint is installed as
+weights/<MODEL>.pt) and verifies the SHA-256 checksum listed in models.yaml.
 
 Examples:
     python get_weights.py --list
@@ -17,8 +18,8 @@ Where the weights come from, in order:
        {type: huggingface, repo: <org/repo>, file: <file in repo>, revision: <tag or commit>}
      A gated Hugging Face repository needs access approval and a login (hf auth login, or HF_TOKEN).
 
-Accepted inputs: a PyTorch checkpoint (.pt/.pth), a .tar.gz / .tgz / .tar / .zip archive that contains
-one, or a gzipped checkpoint.
+Accepted inputs: a .safetensors file, a PyTorch checkpoint (.pt/.pth), a .tar.gz / .tgz / .tar / .zip
+archive that contains one, or a gzipped checkpoint.
 """
 import argparse
 import gzip
@@ -30,9 +31,9 @@ import tempfile
 import urllib.request
 import zipfile
 
-from model_registry import load_registry, weights_path, sha256, verify_weights
+from model_registry import load_registry, weights_path, sha256, verify_weights, WEIGHT_EXTS
 
-CKPT_EXT = ('.pt', '.pth', '.ckpt')
+CKPT_EXT = ('.safetensors', '.pt', '.pth', '.ckpt')
 
 
 def download(url, dest):
@@ -124,7 +125,7 @@ def fetch_huggingface(source, model, tmp):
         from huggingface_hub import hf_hub_download
     except ImportError:
         sys.exit("Downloading from Hugging Face needs huggingface_hub: pip install huggingface_hub")
-    repo, fname = source['repo'], source.get('file', f'{model}.pt')
+    repo, fname = source['repo'], source.get('file', f'{model}.safetensors')
     revision = source.get('revision')
     page = f"https://huggingface.co/{repo}"
     print(f"Downloading {fname} from Hugging Face {repo}" + (f" @ {revision}" if revision else ''))
@@ -141,6 +142,16 @@ def fetch_huggingface(source, model, tmp):
         if 'EntryNotFound' in name or 'RevisionNotFound' in name:
             sys.exit(f"{fname} (revision {revision or 'main'}) was not found in {repo}: check weights.source in models.yaml.")
         raise
+
+
+def is_safetensors(path):
+    """safetensors: 8-byte little-endian header length, then a JSON header starting with '{'."""
+    with open(path, 'rb') as f:
+        head = f.read(9)
+    if len(head) < 9 or head[8:9] != b'{':
+        return False
+    n = int.from_bytes(head[:8], 'little')
+    return 2 <= n <= os.path.getsize(path) - 8
 
 
 def main():
@@ -170,10 +181,10 @@ def main():
                  f"  python get_weights.py --model {args.model} --url <link>\n"
                  f"or a file you already downloaded:\n"
                  f"  python get_weights.py --model {args.model} --file <downloaded file>")
-    dest = weights_path(args.model)
-    dest_dir = os.path.dirname(dest)
-    if os.path.exists(dest) and not args.force:
-        sys.exit(f"Already installed: {dest} (use --force to replace)")
+    installed = [weights_path(args.model, e) for e in WEIGHT_EXTS if os.path.isfile(weights_path(args.model, e))]
+    if installed and not args.force:
+        sys.exit(f"Already installed: {installed[0]} (use --force to replace)")
+    dest_dir = os.path.dirname(weights_path(args.model, WEIGHT_EXTS[0]))
     os.makedirs(dest_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory(dir=dest_dir, prefix='.get_weights_') as tmp:
@@ -186,7 +197,8 @@ def main():
             raw = args.file
             if not os.path.isfile(raw):
                 sys.exit(f"No such file: {raw}")
-        ckpt = extract_checkpoint(raw, tmp, os.path.basename(dest))
+        ckpt = extract_checkpoint(raw, tmp, f'{args.model}.safetensors')
+        dest = weights_path(args.model, '.safetensors' if is_safetensors(ckpt) else '.pt')
         expected = (entry.get('weights', {}).get('sha256') or '').lower()
         actual = sha256(ckpt)
         if expected and actual != expected:
@@ -197,6 +209,11 @@ def main():
         else:
             shutil.move(ckpt, dest + '.part')
         os.replace(dest + '.part', dest)
+        for old in installed:  # a previous install in the other format would otherwise be ambiguous
+            if old != dest:
+                os.remove(old)
+                if os.path.exists(old + '.sha256.json'):
+                    os.remove(old + '.sha256.json')
     verify_weights(dest, entry, quiet=True)  # records the verification stamp
     print(f"Installed {args.model} weights: {dest}")
     print(f"SHA-256: {actual}" + ("  (matches models.yaml)" if expected else

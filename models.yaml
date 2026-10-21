@@ -14,11 +14,11 @@
 # preprocessing.spacing_mm: resampling spacing (x, y, z) before inference; output is
 #                           resampled back to the input grid
 # inference.body_mask: zero labels outside the body (CT, -150 HU threshold)
-# weights.sha256 / version: checksum and version of the released weights file
+# weights.sha256 / version: checksum and version of the released weights file (weights/<NAME>.safetensors)
 # weights.source (optional): where get_weights.py downloads the weights when no --url / --file is given.
 #   Without it, weights are shared on request (a link sent by the maintainers). Examples:
-#     source: {type: huggingface, repo: cerr/CT_ThoraxOARs_SMITplus, file: CT_ThoraxOARs_SMITplus.pt, revision: v1.0}
-#     source: {type: url, url: "https://example.org/CT_ThoraxOARs_SMITplus.pt"}
+#     source: {type: huggingface, repo: cerr/CT_ThoraxOARs_SMITplus, file: CT_ThoraxOARs_SMITplus.safetensors, revision: v1.0}
+#     source: {type: url, url: "https://example.org/CT_ThoraxOARs_SMITplus.safetensors"}
 #   Several models may share one repository (one access approval for all of them) or each have
 #   its own (access approved per model).
 
@@ -35,7 +35,7 @@ models:
     labels: {1: Lung_L, 2: Lung_R, 3: Esophagus, 4: Heart}
     preprocessing: {hu_window: [-750, 1750], spacing_mm: [1.5, 1.5, 2.0]}
     inference: {blend: gaussian, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
-    weights: {sha256: "4d5cdc530d2fcdaac4512a3883937743a8fa2aef72d514eaee61024345251596", version: ""}
+    weights: {sha256: "1756a760bc671f93493eb12055fb0128150f78b278b51be8b599b479ac5f5c7e", version: "2026-10-21"}
     card: docs/models/CT_ThoraxOARs_SMITplus.md
 
   CT_LungGTV_SMITplus:
@@ -47,7 +47,7 @@ models:
     labels: {1: GTV}
     preprocessing: {hu_window: [-500, 500], spacing_mm: [1.5, 1.5, 2.0]}
     inference: {blend: gaussian, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
-    weights: {sha256: "d736901b52558bb62f375d630a331e1d2f1dbd628e22985dbc573a7695bb4990", version: ""}
+    weights: {sha256: "2fd2881cc0dd4f386d9bf4012cb01b52d94e8aaa2301ea07a89663167d6b0bcd", version: "2026-10-21"}
     card: docs/models/CT_LungGTV_SMITplus.md
 
   CT_CADSRegions_SMITplus:
@@ -63,7 +63,7 @@ models:
              10: SpinalCanal_Cord}
     preprocessing: {hu_window: [-750, 1750], spacing_mm: [1.5, 1.5, 1.5]}
     inference: {blend: gaussian, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
-    weights: {sha256: "4d5770f07c9eb5b91645279a4d4e9957d722cdba6eed20329d59ad209e5caa71", version: ""}
+    weights: {sha256: "47425e0f33dbf480853938633bd8e7255de5eb37dcab2c739deffd969bcddf87", version: "2026-10-21"}
     card: docs/models/CT_CADSRegions_SMITplus.md
 
   CT_HeartSubstruct_SMIT:
@@ -76,7 +76,7 @@ models:
              6: Right_Atrium, 7: Right_Ventricle, 8: Left_Atrium, 9: Left_Ventricle}
     preprocessing: {hu_window: [-200, 300], spacing_mm: [1.0, 1.0, 3.0]}
     inference: {blend: constant, overlap: 0.5, sw_batch_size: 4, amp: true, body_mask: true}
-    weights: {sha256: "cee7a3aef8311d1578131a3fb382ba1ec045c06337a828a5b455b274c84a78c4", version: "2026-02-10"}
+    weights: {sha256: "617fd1f3194eeed05241101a80251260b131510e158c2d2ec415e6ae052b996c", version: "2026-02-10"}
     card: docs/models/CT_HeartSubstruct_SMIT.md
 
   # ---- incomplete: network settings carried over from earlier code; not yet documented ----

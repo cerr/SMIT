@@ -1,5 +1,6 @@
 import os
 import json
+import warnings
 import numpy as np
 import sys
 import argparse
@@ -11,7 +12,6 @@ import scipy.ndimage as snm
 import torch
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
-from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from monai import data, transforms
@@ -56,16 +56,61 @@ def print_models():
     print(f"\nWeights are installed as {weights_path('<MODEL>')} (see get_weights.py).")
 
 
+TORCH_REINSTALL = ("uv pip install --reinstall torch==2.8.0 torchvision==0.23.0 "
+                   "--index-url https://download.pytorch.org/whl/{}")
+
+
+def cuda_available():
+    """torch.cuda.is_available(), but stop with instructions if an NVIDIA GPU is present and only the
+    driver is too old for this PyTorch build (PyTorch would otherwise fall back to the slow CPU silently)."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ok = torch.cuda.is_available()
+    if not ok:
+        msg = " ".join(str(w.message) for w in caught)
+        if "driver" in msg.lower() and "old" in msg.lower():
+            sys.exit(f"The NVIDIA driver is too old for this PyTorch build (CUDA {torch.version.cuda}). Update the "
+                     f"driver (570 or newer for the CUDA 12.8 build), or install a build for older drivers:\n  "
+                     + TORCH_REINSTALL.format("cu126") + "\nPyTorch said: " + msg.strip())
+    return ok
+
+
+def check_cuda_build(index=0):
+    """Stop with instructions if the installed PyTorch has no kernels for this GPU (e.g. a Blackwell
+    RTX 50-series card with a build older than CUDA 12.8), instead of PyTorch's 'no kernel image' error."""
+    major, minor = torch.cuda.get_device_capability(index)
+    cap = major * 10 + minor
+    built = torch.cuda.get_arch_list()  # e.g. ['sm_75', 'sm_80', ..., 'sm_120']
+    for a in built:
+        kind, _, num = a.partition('_')
+        num = int(num) if num.isdigit() else -1
+        # a kernel binary runs on later GPUs of the same generation; PTX (compute_*) is compiled for newer GPUs
+        if (kind == 'sm' and num // 10 == major and num <= cap) or (kind == 'compute' and 0 <= num <= cap):
+            return
+    name = torch.cuda.get_device_name(index)
+    if cap >= 70:
+        fix = ("For Blackwell GPUs (RTX 50-series, RTX PRO Blackwell) and other recent cards, install the "
+               "CUDA 12.8 build:\n  " + TORCH_REINSTALL.format("cu128"))
+    else:
+        fix = ("Older GPUs (Maxwell, Tesla P100) need the CUDA 12.6 build:\n  " + TORCH_REINSTALL.format("cu126"))
+    sys.exit(f"This GPU ({name}, sm_{cap}) is not supported by the installed PyTorch build "
+             f"(CUDA {torch.version.cuda}, built for {', '.join(built) or 'no GPUs'}).\n"
+             + fix + "\nor run on the CPU with --device cpu (much slower).")
+
+
 def select_device(choice):
     """CUDA, Apple-silicon GPU (MPS) or CPU. For MPS, setting PYTORCH_ENABLE_MPS_FALLBACK=1 before
     starting Python lets operations that MPS does not implement run on the CPU."""
     mps_ok = getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+    cuda_ok = cuda_available() if choice in ("auto", "cuda") else False
     if choice == "auto":
-        choice = "cuda" if torch.cuda.is_available() else ("mps" if mps_ok else "cpu")
-    if choice == "cuda" and not torch.cuda.is_available():
+        choice = "cuda" if cuda_ok else ("mps" if mps_ok else "cpu")
+    if choice == "cuda" and not cuda_ok:
         sys.exit("--device cuda requested but no CUDA GPU is available")
     if choice == "mps" and not mps_ok:
         sys.exit("--device mps requested but the Apple-silicon GPU (MPS) is not available")
+    if choice == "cuda":
+        check_cuda_build()
     return torch.device(choice)
 
 
@@ -112,7 +157,7 @@ def export_dicom_results(args, dicom_cases):
 
 
 def resolve_weights(args):
-    """Weights: --pretrained_model_path if given, else the installed weights/<MODEL>.pt.
+    """Weights: --pretrained_model_path if given, else the installed weights/<MODEL>.safetensors (or .pt).
     A missing file is an error; the checksum in models.yaml is verified."""
     entry = MODEL_REGISTRY[args.model]
     explicit = args.pretrained_model_path is not None
@@ -168,9 +213,10 @@ def setup_argparser():
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"],
                         help="auto = CUDA GPU, else Apple-silicon GPU (mps), else CPU")
     parser.add_argument("--pretrained_model_path", default=None, type=str,
-                        help="checkpoint file to use instead of the installed weights/<MODEL>.pt")
+                        help="weights file (.safetensors or .pt) to use instead of the installed weights/<MODEL>.safetensors")
     parser.add_argument('--model_feature', default=96, type=int, help='model_embedding_feature size')
-    parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--amp", action="store_true",
+                        help="mixed precision (float16) on a CUDA or Apple-silicon (mps) GPU; the CPU always runs float32")
     parser.add_argument("--in_channels", default=1, type=int, help="number of input channels")
     parser.add_argument("--out_channels", default=2, type=int, help="number of output channels")
     parser.add_argument("--norm_name", default="instance", type=str, help="normalization name")
@@ -356,6 +402,21 @@ def apply_postprocessing(pred_t, args):
     return pred_labels.to(torch.int64)
 
 
+def load_weights_file(path):
+    """State dict from a .safetensors file (tensors only, safe to load) or a PyTorch checkpoint (.pt).
+    float16 weights are converted to the model's float32 parameters by load_state_dict."""
+    if path.lower().endswith('.safetensors'):
+        from safetensors.torch import load_file
+        return load_file(path, device='cpu')
+    try:
+        # .pt checkpoints may hold non-tensor objects, which the safe loader rejects; these files
+        # are only loaded after their checksum has been verified against models.yaml
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:  # torch < 1.13 has no weights_only argument
+        checkpoint = torch.load(path, map_location="cpu")
+    return checkpoint.get("state_dict", checkpoint)
+
+
 # Load model on device
 def load_model(args, device):
     cfg = MODEL_REGISTRY[args.model]['network']
@@ -380,11 +441,7 @@ def load_model(args, device):
             norm_name=args.norm_name,
         )
 
-    try:
-        checkpoint = torch.load(args.pretrained_model_path, map_location="cpu", weights_only=False)
-    except TypeError:  # torch < 1.13 has no weights_only argument
-        checkpoint = torch.load(args.pretrained_model_path, map_location="cpu")
-    model_dict = checkpoint.get("state_dict", checkpoint)
+    model_dict = load_weights_file(args.pretrained_model_path)
 
     # Handle DDP state dict
     new_state_dict = {}
@@ -412,6 +469,30 @@ def make_seg_filename(path):
             break
     fname = f"{name}_seg.nii.gz"
     return fname
+
+
+def mps_amp_compat(model):
+    """PyTorch on Apple GPUs (MPS) cannot run 3D transposed convolutions in float16/bfloat16.
+    Run those layers in float32 (mixed precision paused around them); everything else keeps float16."""
+    def fp32_forward(orig):
+        def forward(x, *a, **k):
+            with torch.autocast(device_type='mps', enabled=False):
+                return orig(x.float(), *a, **k)
+        return forward
+    n = 0
+    for m in model.modules():
+        if isinstance(m, torch.nn.ConvTranspose3d):
+            m.forward = fp32_forward(m.forward)
+            n += 1
+    return n
+
+
+# Mixed precision: float16 on GPUs (CUDA, Apple MPS). The CPU runs float32: bfloat16 on the CPU was
+# measurably less accurate (lowest structure Dice 0.98 vs GPU) and not faster on CPUs without bfloat16 hardware.
+def get_amp_dtype(args, device):
+    if args.amp and device.type in ('cuda', 'mps'):
+        return torch.float16
+    return None
 
 
 # Run inference with optional test-time augmentation
@@ -472,7 +553,7 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
     test_ds = data.Dataset(test_files, transform=test_transform)
     sampler = DistributedSampler(test_ds, shuffle=False) if args.distributed else None
     test_loader = data.DataLoader(test_ds, batch_size=1, shuffle=False, sampler=sampler,
-                                  num_workers=args.workers, pin_memory=True)
+                                  num_workers=args.workers, pin_memory=device.type == "cuda")
     loader_iter = tqdm(test_loader, desc=dataset_name) if is_main_process(args) else test_loader
     status = 0
 
@@ -481,8 +562,11 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
             img_path = batch["image_meta_dict"]["filename_or_obj"][0]
             try:
                 val_inputs = batch["image"].to(device)
-                with autocast(enabled=args.amp and device.type == 'cuda'):
+                amp_dtype = get_amp_dtype(args, device)
+                with torch.autocast(device_type=device.type, dtype=amp_dtype or torch.float32,
+                                    enabled=amp_dtype is not None):
                     batch["pred"] = run_inference_with_tta(model, val_inputs, args)
+                batch["pred"] = batch["pred"].float()  # post-process in float32 (values unchanged)
 
                 b0 = [post_transforms(i) for i in decollate_batch(batch)][0]
                 seg_np = apply_postprocessing(b0["pred"].float(), args).cpu().numpy().astype(np.uint8)
@@ -521,6 +605,7 @@ def main():
     # Set device
     if args.distributed:
         device = torch.device(f"cuda:{args.local_rank}")
+        check_cuda_build(args.local_rank)
     else:
         device = select_device(args.device)
 
@@ -536,11 +621,17 @@ def main():
             print(f"World size: {args.world_size}")
         print(f"Orientation transform: {'SKIPPED' if args.skip_orientation else 'RAS'}")
         print(f"TTA: {args.use_tta}")
+        amp_dtype = get_amp_dtype(args, device)
+        print(f"Mixed precision: {str(amp_dtype).replace('torch.', '') if amp_dtype else 'off (float32)'}")
         print("=" * 60 + "\n")
 
     if is_main_process(args):
         print("Loading model...")
     model = load_model(args, device)
+    if device.type == 'mps' and get_amp_dtype(args, device) is not None:
+        n = mps_amp_compat(model)
+        if is_main_process(args):
+            print(f"Apple GPU: {n} transposed-convolution layers run in float32 (no float16 support on MPS)")
     test_transform, post_transforms = create_transforms(args)
     for n in args.datasets:
         status = process_dataset(n, args, model, test_transform, post_transforms, device)

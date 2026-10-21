@@ -9,7 +9,7 @@ Cardiac substructures on CT.
 | Intensity window | -200 to 300 HU, scaled to [0, 1] |
 | Resampling | 1.0 x 1.0 x 3.0 mm, RAS orientation |
 | Inference | 128^3 patches, overlap 0.5, constant blending, sliding-window batch 4, mixed precision; labels outside the body (-150 HU) removed |
-| Weights | `weights/CT_HeartSubstruct_SMIT.pt`, installed with `get_weights.py` (checksum in `models.yaml`) |
+| Weights | `weights/CT_HeartSubstruct_SMIT.safetensors`, installed with `get_weights.py` (checksum in `models.yaml`) |
 
 ## Notes
 

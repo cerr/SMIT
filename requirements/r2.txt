@@ -10,5 +10,6 @@ ml-collections==1.1.0
 timm==0.9.16
 einops==0.8.2
 pyyaml==6.0.3
+safetensors>=0.4
 # DICOM input / RTSTRUCT output (core library, no viewer); latest release
 pycerr

@@ -1394,7 +1394,6 @@ class SwinTransformerV2_SMIT_For_FineTunning_Only(nn.Module):
         self.feature_info = []
         
 
-        print ('error: self.num_features size is ',self.num_features)
         if not isinstance(embed_dim, (tuple, list)):
             
             embed_dim = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
@@ -1463,7 +1462,6 @@ class SwinTransformerV2_SMIT_For_FineTunning_Only(nn.Module):
 
         self.encoder_stride=32
         
-        print ('info patch_size size ',patch_size)
         
         self.hidden_size=embed_dim[-1]*2
         self.pt_size=self.encoder_stride

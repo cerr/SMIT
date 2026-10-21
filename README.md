@@ -42,7 +42,7 @@ source .venv/bin/activate
 uv pip install -r requirements/r1.txt
 uv pip install -r requirements/r2.txt
 
-# 3. Model weights -> ~/SMIT/weights/CT_ThoraxOARs_SMITplus.pt
+# 3. Model weights -> ~/SMIT/weights/CT_ThoraxOARs_SMITplus.safetensors
 python get_weights.py --model CT_ThoraxOARs_SMITplus --url "<link you received>"
 
 # 4a. NIfTI input: a folder of .nii / .nii.gz scans
@@ -68,7 +68,7 @@ uv venv --python 3.12
 uv pip install -r requirements\r1.txt
 uv pip install -r requirements\r2.txt
 
-REM 3. Model weights -> C:\tools\SMIT\weights\CT_ThoraxOARs_SMITplus.pt
+REM 3. Model weights -> C:\tools\SMIT\weights\CT_ThoraxOARs_SMITplus.safetensors
 python get_weights.py --model CT_ThoraxOARs_SMITplus --url "<link you received>"
 
 REM 4a. NIfTI input: a folder of .nii / .nii.gz scans
@@ -112,8 +112,24 @@ uv pip install -r requirements/r2.txt
 ```
 
 Activate the environment (`source .venv/bin/activate`, or `.venv\Scripts\activate` on Windows)
-before running the commands below. `requirements/r1.txt` installs the CUDA 12.6 build of PyTorch;
-see the comments in that file for other CUDA versions or CPU only.
+before running the commands below.
+
+**NVIDIA GPUs:** `requirements/r1.txt` installs PyTorch's CUDA 12.8 build, which supports GPUs from the
+GTX 10-series (Pascal) through Blackwell (RTX 50-series, RTX PRO Blackwell) and needs an NVIDIA driver 570 or
+newer. If `run_segmentation.py` reports that the driver is too old or the GPU is not
+supported, it prints the command to install a matching build; for reference:
+
+| Situation | PyTorch build |
+|---|---|
+| Driver 570+ (GTX 10-series through Blackwell) | `cu128` (default) |
+| Driver older than 570, or a Maxwell GPU / Tesla P100 | `cu126` |
+| No NVIDIA GPU | `cpu` |
+
+For example, with an older driver:
+
+```bash
+uv pip install --reinstall torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu126
+```
 
 **macOS (Apple silicon):** PyTorch has no CUDA builds for macOS, so install it from the default index
 instead of `requirements/r1.txt`:
@@ -125,7 +141,13 @@ uv pip install -r requirements/r2.txt
 
 Run with `--device mps` (the default `auto` picks it when no CUDA GPU is present) and set
 `PYTORCH_ENABLE_MPS_FALLBACK=1` so that any operation the Apple GPU backend lacks runs on the CPU.
-Mixed precision is currently used on CUDA only; on MPS and CPU the models run in float32.
+Mixed precision (float16) is used on CUDA and Apple-silicon GPUs for models with `amp: true` in
+`models.yaml`; on the CPU the models run in float32. On Apple silicon the results match a CUDA GPU to within
+0.001% of voxels. Memory is shared with the rest of the system. With `--sw_batch_size 1` (the SMIT_Plus
+models' default; `CT_HeartSubstruct_SMIT` defaults to 4, which needs more), `CT_HeartSubstruct_SMIT` needs about
+12 GB and runs in about 1.5 minutes per scan on an M4 with 16 GB, while the SMIT_Plus models (e.g.
+`CT_ThoraxOARs_SMITplus`) need about 20 GB, so use a Mac with 24 GB or more for them; with less they run, but
+very slowly.
 
 ## Getting model weights
 
@@ -139,8 +161,8 @@ python get_weights.py --model CT_ThoraxOARs_SMITplus --file /path/to/download
 python get_weights.py --list
 ```
 
-This installs the checkpoint as `weights/<MODEL>.pt` in the repository folder, e.g.
-`weights/CT_ThoraxOARs_SMITplus.pt`, after checking it against the SHA-256 checksum in `models.yaml`,
+This installs the weights as `weights/<MODEL>.safetensors` in the repository folder, e.g.
+`weights/CT_ThoraxOARs_SMITplus.safetensors`, after checking them against the SHA-256 checksum in `models.yaml`,
 so a wrong or corrupted file is rejected. `run_segmentation.py --model <MODEL>` uses that file; if it is
 missing, it stops and prints the `get_weights.py` command to run. To use a checkpoint stored elsewhere,
 pass `--pretrained_model_path`.
@@ -160,9 +182,9 @@ python run_segmentation.py --model CT_ThoraxOARs_SMITplus --data_dir /path/to/im
   masking come from the model's entry in `models.yaml`. Any of them can be overridden on the command line,
   e.g. `--a_min`, `--space_z`, `--blend`, `--sw_batch_size`.
 - `--device auto` (default) uses a CUDA GPU, else an Apple-silicon GPU (`mps`), else the CPU. The CPU gives the
-  same segmentations but is much slower: about 5 minutes per scan for `CT_ThoraxOARs_SMITplus` on a 12-core
-  workstation CPU, against under a minute on a GPU.
-- `--pretrained_model_path` runs a specific checkpoint file instead of `weights/<MODEL>.pt`.
+  same segmentations but is much slower and needs a lot of memory: for `CT_ThoraxOARs_SMITplus`, about
+  5 minutes and up to 53 GB of RAM per scan on a 12-core workstation CPU, against under a minute on a GPU.
+- `--pretrained_model_path` runs a specific weights file (`.safetensors` or PyTorch `.pt`) instead of the installed one.
 - See `python run_segmentation.py --help` for test-time augmentation, confidence thresholding and
   multi-GPU (`torchrun`) options.
 
@@ -199,7 +221,7 @@ To publish a model's weights through a download service instead, add a `source` 
 ```yaml
 weights:
   sha256: "..."
-  source: {type: huggingface, repo: cerr/CT_ThoraxOARs_SMITplus, file: CT_ThoraxOARs_SMITplus.pt, revision: v1.0}
+  source: {type: huggingface, repo: cerr/CT_ThoraxOARs_SMITplus, file: CT_ThoraxOARs_SMITplus.safetensors, revision: v1.0}
 ```
 
 For Hugging Face, a gated repository with manual approval lets you approve each user; access is granted per
