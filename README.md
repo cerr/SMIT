@@ -159,7 +159,9 @@ python run_segmentation.py --model CT_ThoraxOARs_SMITplus --data_dir /path/to/im
 - Preprocessing (intensity window, resampling spacing), sliding-window settings, mixed precision and body
   masking come from the model's entry in `models.yaml`. Any of them can be overridden on the command line,
   e.g. `--a_min`, `--space_z`, `--blend`, `--sw_batch_size`.
-- `--device auto` (default) uses a CUDA GPU, else an Apple-silicon GPU (`mps`), else the CPU (much slower).
+- `--device auto` (default) uses a CUDA GPU, else an Apple-silicon GPU (`mps`), else the CPU. The CPU gives the
+  same segmentations but is much slower: about 5 minutes per scan for `CT_ThoraxOARs_SMITplus` on a 12-core
+  workstation CPU, against under a minute on a GPU.
 - `--pretrained_model_path` runs a specific checkpoint file instead of `weights/<MODEL>.pt`.
 - See `python run_segmentation.py --help` for test-time augmentation, confidence thresholding and
   multi-GPU (`torchrun`) options.

@@ -463,7 +463,7 @@ class WindowAttention(nn.Module):
         attn = self.attn_drop(attn)
 
         
-        attn=attn.half() # only use when don't use deep seepd 
+        attn = attn.to(v.dtype)  # match v: half under CUDA mixed precision, float32 on CPU / MPS
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
