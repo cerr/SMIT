@@ -1,13 +1,6 @@
-simpleitk==2.2.1 
-nibabel==4.0.2 
-monai==0.8.0 
-timm==0.6.11 
-ml-collections==0.1.1 
-einops==0.8.1 
-scikit-image==0.19.3 
-Cmake 
-imagecodecs 
-monai==0.8.0 
-torchaudio==0.12.1 
-pytorch-ignite==0.4.8 
-numpy==1.23.4
+# PyTorch (installed first). Tested: torch 2.8.0 (cu129 build) with Python 3.12 on Windows.
+# The CUDA 12.6 build runs on NVIDIA drivers that support CUDA 12.x. For newer drivers
+# cu128 / cu129 also work; for CPU-only machines use https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.8.0
+torchvision==0.23.0

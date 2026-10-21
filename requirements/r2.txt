@@ -1,2 +1,14 @@
---extra-index-url https://download.pytorch.org/whl/cu116 
-torch==1.12.1+cu116
+# Tested versions (Python 3.12, October 2026)
+monai==1.6.1
+numpy==2.5.2
+SimpleITK==2.5.6
+nibabel==5.4.2
+scikit-image==0.26.0
+scipy==1.18.1
+tqdm==4.70.1
+ml-collections==1.1.0
+timm==0.9.16
+einops==0.8.2
+pyyaml==6.0.3
+# DICOM input / RTSTRUCT output (core library, no viewer); latest release
+pycerr
