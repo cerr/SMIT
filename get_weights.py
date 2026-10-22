@@ -24,6 +24,7 @@ archive that contains one, or a gzipped checkpoint.
 import argparse
 import gzip
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -36,7 +37,18 @@ from model_registry import load_registry, weights_path, sha256, verify_weights, 
 CKPT_EXT = ('.safetensors', '.pt', '.pth', '.ckpt')
 
 
+def direct_download_url(url):
+    """Box shared links (https://<company>.box.com/s/<token>) open a preview page; for files shared with
+    'People with the link', the same token under /shared/static/ downloads the file itself."""
+    m = re.match(r'^(https?://[^/]*box\.com)/s/([A-Za-z0-9]+)/?(?:[?#].*)?$', url.strip())
+    return f'{m.group(1)}/shared/static/{m.group(2)}' if m else url
+
+
 def download(url, dest):
+    direct = direct_download_url(url)
+    if direct != url:
+        print(f"Box shared link: downloading the file directly from {direct}")
+        url = direct
     print(f"Downloading {url}")
     req = urllib.request.Request(url, headers={'User-Agent': 'SMIT-get_weights'})
     with urllib.request.urlopen(req) as r, open(dest, 'wb') as f:
@@ -53,6 +65,13 @@ def download(url, dest):
                 print(f"  {done / 2**20:,.0f} MB" + (f" ({pct}%)" if total else ""), flush=True)
                 last = pct
     print(f"Downloaded {done / 2**20:,.0f} MB")
+
+
+def looks_like_web_page(path):
+    """A download that is an HTML page (sign-in page, file preview page) instead of the weights file."""
+    with open(path, 'rb') as f:
+        head = f.read(1024).lstrip().lower()
+    return head.startswith((b'<!doctype html', b'<html')) or b'<html' in head[:200]
 
 
 def is_torch_zip(path):
@@ -191,6 +210,13 @@ def main():
         if args.url:
             raw = os.path.join(tmp, 'download')
             download(args.url, raw)
+            if looks_like_web_page(raw):
+                sys.exit("The link returned a web page, not the weights file. Sharing sites such as Box do this\n"
+                         "for links that open a preview page or need you to sign in. Open the link in a browser,\n"
+                         "download the file, then install it with:\n"
+                         f"  python get_weights.py --model {args.model} --file <downloaded file>\n"
+                         "(A Box file shared with 'People with the link' may also offer a direct download link,\n"
+                         " https://<company>.box.com/shared/static/..., which works with --url.)")
         elif source:
             raw = fetch_from_source(source, args.model, tmp)
         else:

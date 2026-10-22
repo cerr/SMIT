@@ -13,7 +13,12 @@
 # preprocessing.hu_window: intensities are clipped to this range and scaled to [0, 1]
 # preprocessing.spacing_mm: resampling spacing (x, y, z) before inference; output is
 #                           resampled back to the input grid
+# preprocessing.percentile_rescale: clip at the 99.5th percentile, rescale to 0-1000 before resampling (MR)
+# preprocessing.intensity: window (default; clip to hu_window, scale to [0, 1]) or nonzero_percentile
+#   (clip to intensity_percentiles of the non-zero voxels, scale to [0, 1]; for MR)
+# inference.roi: patch size (default 128^3); pad_mode z_end pads only at the end in z; tta: flip averaging
 # inference.body_mask: zero labels outside the body (CT, -150 HU threshold)
+# postprocessing.largest_component: keep the largest connected component of each label, fill holes
 # weights.sha256 / version: checksum and version of the released weights file (weights/<NAME>.safetensors)
 # weights.source (optional): where get_weights.py downloads the weights when no --url / --file is given.
 #   Without it, weights are shared on request (a link sent by the maintainers). Examples:
@@ -70,7 +75,7 @@ models:
     status: validated
     description: Cardiac substructures (great vessels and chambers) on CT
     modality: CT
-    network: {arch: smit, depths: [2, 2, 12, 2], use_encoder5: false}
+    network: {arch: smit, depths: [2, 2, 8, 2], use_encoder5: false}
     out_channels: 10
     labels: {1: Aorta, 2: Pulmonary_Artery, 3: Pulmonary_Vein, 4: SVC, 5: IVC,
              6: Right_Atrium, 7: Right_Ventricle, 8: Left_Atrium, 9: Left_Ventricle}
@@ -79,13 +84,69 @@ models:
     weights: {sha256: "617fd1f3194eeed05241101a80251260b131510e158c2d2ec415e6ae052b996c", version: "2026-02-10"}
     card: docs/models/CT_HeartSubstruct_SMIT.md
 
+  CT_HN_SMIT:
+    status: validated
+    description: Head and neck organs at risk on CT (16 structures)
+    modality: CT
+    network: {arch: smit_plus, feature_size: 128}
+    out_channels: 17
+    labels: {1: Brainstem, 2: Parotid_L, 3: Parotid_R, 4: Submandibular_L, 5: Submandibular_R, 6: Mandible,
+             7: Oral_Cavity, 8: SpinalCord, 9: Pterygoid_L, 10: Pterygoid_R, 11: Masseter_L, 12: Masseter_R,
+             13: Thyroid, 14: Larynx, 15: BrachialPlexus_L, 16: BrachialPlexus_R}
+    preprocessing: {hu_window: [-750, 1750], spacing_mm: [1.5, 1.5, 1.5]}
+    inference: {blend: constant, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
+    weights: {sha256: "5c00ad8c8aa6d22818149487069a3f497a19400ab0b02bcafcb949343e1d09db", version: "2026-10-22"}
+    card: docs/models/CT_HN_SMIT.md
+
+  CT_WHOLEBODY_SMITplus:
+    status: validated
+    description: Whole-body anatomy on CT (46 structures)
+    modality: CT
+    network: {arch: smit_plus, feature_size: 128}
+    out_channels: 47
+    labels: {1: adrenal_gland_left, 2: adrenal_gland_right, 3: aorta, 4: brain, 5: clavicula_left,
+             6: clavicula_right, 7: colon, 8: duodenum, 9: esophagus, 10: face, 11: femur_left,
+             12: femur_right, 13: gallbladder, 14: heart_atrium_left, 15: heart_atrium_right,
+             16: heart_myocardium, 17: heart_ventricle_left, 18: heart_ventricle_right, 19: hip_left,
+             20: hip_right, 21: humerus_left, 22: humerus_right, 23: iliac_artery_left, 24: iliac_artery_right,
+             25: iliac_vena_left, 26: iliac_vena_right, 27: inferior_vena_cava, 28: kidney_left,
+             29: kidney_right, 30: liver, 31: lung_lower_lobe_left, 32: lung_lower_lobe_right,
+             33: lung_middle_lobe_right, 34: lung_upper_lobe_left, 35: lung_upper_lobe_right, 36: pancreas,
+             37: portal_vein_and_splenic_vein, 38: pulmonary_artery, 39: sacrum, 40: scapula_left,
+             41: scapula_right, 42: small_bowel, 43: spleen, 44: stomach, 45: trachea, 46: urinary_bladder}
+    preprocessing: {hu_window: [-500, 500], spacing_mm: [1.5, 1.5, 2.0]}
+    inference: {blend: constant, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
+    weights: {sha256: "8b650a4d02d0e73bd685577f90c13d112b3ab9092972a68aa2bdf3da06c6f862", version: "2026-10-22"}
+    card: docs/models/CT_WHOLEBODY_SMITplus.md
+
+  MR_HN_Nodule_SMIT:
+    status: validated
+    description: Head and neck nodal / nodule segmentation on MR
+    modality: MR
+    network: {arch: smit, depths: [2, 2, 8, 2], use_encoder5: false}
+    out_channels: 2
+    labels: {1: Nodule}
+    preprocessing: {intensity: nonzero_percentile, intensity_percentiles: [1, 99], spacing_mm: [1.5, 1.5, 1.5]}
+    inference: {blend: constant, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: false}
+    weights: {sha256: "c23b2b20142186a5ae5fb0fae9c77fed2317b30e07ec53c1c736b0f03e8c280d", version: "2026-10-22"}
+    card: docs/models/MR_HN_Nodule_SMIT.md
+
+  MR_Rectum_GTV_SMIT:
+    status: validated
+    description: Rectal cancer GTV on T2-weighted MR
+    modality: MR
+    network: {arch: smit, depths: [2, 2, 12, 2], use_encoder5: true}
+    out_channels: 2
+    labels: {1: GTV}
+    preprocessing: {percentile_rescale: true, hu_window: [0, 800], spacing_mm: [1.0, 1.0, 1.0]}
+    inference: {roi: [128, 128, 64], pad_mode: z_end, blend: gaussian, overlap: 0.5, sw_batch_size: 1, tta: true,
+                amp: false, body_mask: false}
+    postprocessing: {largest_component: true}
+    weights: {sha256: "f81aadef532c1d2233c1e99b76dce47dc067c4a352f8dd143e425715245aa865", version: "3.0"}
+    card: docs/models/MR_Rectum_GTV_SMIT.md
+
   # ---- incomplete: network settings carried over from earlier code; not yet documented ----
 
-  CT_HN_SMIT:
-    status: incomplete
-    description: Head and neck (settings to be documented)
-    modality: CT
-    network: {arch: smit, depths: [2, 2, 8, 2], use_encoder5: false, feature_size: 128}
 
   CT_Lung_SMIT:
     status: incomplete
@@ -93,8 +154,3 @@ models:
     modality: CT
     network: {arch: smit, depths: [2, 2, 8, 2], use_encoder5: false}
 
-  MR_Rectum_GTV_SMIT:
-    status: incomplete
-    description: Rectal GTV on MR (settings to be documented)
-    modality: MR
-    network: {arch: smit, depths: [2, 2, 12, 2], use_encoder5: true}

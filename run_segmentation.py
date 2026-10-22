@@ -15,8 +15,8 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from monai import data, transforms
-from monai.data import load_decathlon_datalist, decollate_batch
-from monai.transforms import Flip, MapTransform
+from monai.data import load_decathlon_datalist, decollate_batch, MetaTensor
+from monai.transforms import MapTransform
 from monai.inferers import sliding_window_inference
 
 from smit_models import configs_smit, smit, smit_plus
@@ -41,11 +41,22 @@ def registry_defaults(name):
         d['a_min'], d['a_max'] = pre['hu_window']
     if 'spacing_mm' in pre:
         d['space_x'], d['space_y'], d['space_z'] = pre['spacing_mm']
+    if 'percentile_rescale' in pre:
+        d['percentile_rescale'] = pre['percentile_rescale']
+    if 'intensity' in pre:
+        d['intensity'] = pre['intensity']
+    if 'intensity_percentiles' in pre:
+        d['intensity_percentiles'] = list(pre['intensity_percentiles'])
     inf = e.get('inference', {})
     for key, arg in (('blend', 'blend'), ('overlap', 'infer_overlap'), ('sw_batch_size', 'sw_batch_size'),
-                     ('amp', 'amp'), ('body_mask', 'body_mask')):
+                     ('amp', 'amp'), ('body_mask', 'body_mask'), ('tta', 'use_tta'), ('pad_mode', 'pad_mode')):
         if key in inf:
             d[arg] = inf[key]
+    if 'roi' in inf:
+        d['roi_x'], d['roi_y'], d['roi_z'] = inf['roi']
+    post = e.get('postprocessing', {})
+    if 'largest_component' in post:
+        d['largest_component'] = post['largest_component']
     return d
 
 
@@ -200,6 +211,13 @@ def setup_argparser():
                         help="skip Orientation transform (for datasets already in correct orientation)")
     parser.add_argument("--pad_mode", default=None, choices=['symmetric', 'z_end'])
     parser.add_argument("--percentile_rescale", action="store_true")
+    parser.add_argument("--intensity", default="window", choices=["window", "nonzero_percentile"],
+                        help="window: clip to [a_min, a_max] and scale to [0, 1]; nonzero_percentile: clip to the "
+                             "--intensity_percentiles of the non-zero voxels and scale to [0, 1] (MR)")
+    parser.add_argument("--intensity_percentiles", default=[1.0, 99.0], type=float, nargs=2,
+                        help="lower and upper percentile for --intensity nonzero_percentile")
+    parser.add_argument("--largest_component", action="store_true",
+                        help="keep only the largest connected component of each label and fill its holes")
     parser.add_argument("--body_mask", action="store_true")
 
     # Model arguments
@@ -308,6 +326,8 @@ def is_main_process(args):
 
 # Pre-processing options
 class PercentileClipRescale(MapTransform):
+    """Clip at the given percentile of all voxels and rescale to [0, rescale_max] (int16), as the MR rectum
+    model was trained. The result stays a MetaTensor so the later transforms still see the image geometry."""
     def __init__(self, keys, percentile=99.5, rescale_max=1000):
         super().__init__(keys)
         self.percentile = percentile
@@ -316,11 +336,46 @@ class PercentileClipRescale(MapTransform):
     def __call__(self, data):
         d = dict(data)
         for key in self.keys:
-            image_np = d[key].astype(np.float32)
+            img = d[key]
+            image_np = np.asarray(img.cpu() if torch.is_tensor(img) else img, dtype=np.float32)
             perc_val = np.percentile(image_np, self.percentile)
             image_np = np.clip(image_np, a_min=None, a_max=perc_val)
-            d[key] = ((image_np / perc_val) * self.rescale_max).astype(np.int16)
+            out = torch.from_numpy(((image_np / perc_val) * self.rescale_max).astype(np.int16))
+            d[key] = MetaTensor(out, meta=img.meta, applied_operations=img.applied_operations) \
+                if isinstance(img, MetaTensor) else out
         return d
+
+
+class NonzeroPercentileNormalize(MapTransform):
+    """Clip to the given percentiles of the non-zero voxels and scale to [0, 1] (all-zero images unchanged)."""
+    def __init__(self, keys, lower=1.0, upper=99.0):
+        super().__init__(keys)
+        self.lower, self.upper = lower, upper
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            img = d[key]
+            nz = img[img > 0]
+            if nz.numel() == 0:
+                continue
+            lo, hi = (float(v) for v in np.percentile(np.asarray(nz.cpu()), [self.lower, self.upper]))
+            d[key] = (img.clamp(min=lo, max=hi) - lo) / max(hi - lo, 1e-8)
+        return d
+
+
+def keep_largest_component(seg_np):
+    """For each label: keep the largest 3D connected component (26-connectivity) and fill its holes."""
+    out = np.zeros_like(seg_np)
+    for lab in np.unique(seg_np):
+        if lab == 0:
+            continue
+        cc, n = label(seg_np == lab, connectivity=3, return_num=True)
+        if n == 0:
+            continue
+        largest = np.argmax(np.bincount(cc.ravel())[1:]) + 1
+        out[snm.binary_fill_holes(cc == largest) & (out == 0)] = lab
+    return out
 
 
 def create_transforms(args):
@@ -329,14 +384,18 @@ def create_transforms(args):
              transforms.EnsureChannelFirstd(keys=["image"])]
     if args.percentile_rescale:
         tlist.append(PercentileClipRescale(keys=["image"]))
+    if args.intensity == "nonzero_percentile":  # on the original grid, before resampling
+        tlist.append(NonzeroPercentileNormalize(keys=["image"], lower=args.intensity_percentiles[0],
+                                                upper=args.intensity_percentiles[1]))
     tlist.append(transforms.Spacingd(keys=["image"],
                                      pixdim=(args.space_x, args.space_y, args.space_z),
                                      mode="bilinear"))
     if not args.skip_orientation:
         tlist.append(transforms.Orientationd(keys=["image"], axcodes="RAS"))
-    tlist += [transforms.ScaleIntensityRanged(keys=["image"], a_min=args.a_min, a_max=args.a_max,
-                                              b_min=args.b_min, b_max=args.b_max, clip=True),
-              transforms.CropForegroundd(keys=["image"], source_key="image")]
+    if args.intensity == "window":
+        tlist.append(transforms.ScaleIntensityRanged(keys=["image"], a_min=args.a_min, a_max=args.a_max,
+                                                     b_min=args.b_min, b_max=args.b_max, clip=True))
+    tlist.append(transforms.CropForegroundd(keys=["image"], source_key="image"))
     if args.pad_mode == 'z_end':
         tlist += [transforms.SpatialPadd(keys=["image"], spatial_size=(args.roi_x, args.roi_y, 0)),
                   transforms.SpatialPadd(keys=["image"], spatial_size=(0, 0, args.roi_z), method='end')]
@@ -509,13 +568,17 @@ def run_inference_with_tta(model, val_inputs, args):
         )
         return pred
 
+    # TTA: average with a left-right flip. MONAI's Flip(spatial_axis=1) on a batched [B, C, x, y, z] tensor flips
+    # tensor dim 2, which is what the model was validated with; torch.flip does the same without MONAI's
+    # affine bookkeeping (which fails on batched images in recent MONAI versions).
+    flip = lambda t: torch.flip(t, dims=(2,))
     preds = []
     for do_flip in [False, True]:
         aug_inputs = val_inputs
 
         # Apply flip
         if do_flip:
-            aug_inputs = Flip(spatial_axis=1)(aug_inputs)
+            aug_inputs = flip(aug_inputs)
 
         # Run inference
         pred = sliding_window_inference(
@@ -530,7 +593,7 @@ def run_inference_with_tta(model, val_inputs, args):
 
         # Invert flip
         if do_flip:
-            pred = Flip(spatial_axis=1)(pred)
+            pred = flip(pred)
 
         preds.append(pred)
 
@@ -572,6 +635,8 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
                 seg_np = apply_postprocessing(b0["pred"].float(), args).cpu().numpy().astype(np.uint8)
                 if args.body_mask:
                     seg_np = apply_body_mask(seg_np, img_path)
+                if args.largest_component:
+                    seg_np = keep_largest_component(seg_np)
 
                 affine = b0["image_meta_dict"].get("original_affine", np.eye(4))
                 out_file = os.path.join(output_directory, make_seg_filename(img_path))

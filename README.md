@@ -18,7 +18,11 @@ each model is described in [`models.yaml`](models.yaml) and has a model card in 
 | [`CT_LungGTV_SMITplus`](docs/models/CT_LungGTV_SMITplus.md) | CT / CBCT | Lung tumor GTV | validated |
 | [`CT_CADSRegions_SMITplus`](docs/models/CT_CADSRegions_SMITplus.md) | CT / CBCT | Spinal canal / cord (+ 9 body regions, names unconfirmed) | validated |
 | [`CT_HeartSubstruct_SMIT`](docs/models/CT_HeartSubstruct_SMIT.md) | CT | Aorta, pulmonary artery and veins, SVC, IVC, four chambers | validated |
-| `CT_HN_SMIT`, `CT_Lung_SMIT`, `MR_Rectum_GTV_SMIT` | | | incomplete: network settings only |
+| [`CT_HN_SMIT`](docs/models/CT_HN_SMIT.md) | CT | 16 head and neck organs at risk | validated |
+| [`CT_WHOLEBODY_SMITplus`](docs/models/CT_WHOLEBODY_SMITplus.md) | CT | 46 whole-body structures | validated |
+| [`MR_HN_Nodule_SMIT`](docs/models/MR_HN_Nodule_SMIT.md) | MR | Head and neck nodule | validated |
+| [`MR_Rectum_GTV_SMIT`](docs/models/MR_Rectum_GTV_SMIT.md) | MR (T2) | Rectal cancer GTV | validated |
+| `CT_Lung_SMIT` | | | incomplete: network settings only |
 
 `python run_segmentation.py --list_models` shows the same list and which weights are installed.
 
@@ -160,6 +164,8 @@ python get_weights.py --model CT_ThoraxOARs_SMITplus --url "<link you received>"
 python get_weights.py --model CT_ThoraxOARs_SMITplus --file /path/to/download
 python get_weights.py --list
 ```
+
+Box links (`https://<company>.box.com/s/...`) work with `--url` when the file is shared with "People with the link". If the link needs a sign-in, open it in a browser, download the file and use `--file`.
 
 This installs the weights as `weights/<MODEL>.safetensors` in the repository folder, e.g.
 `weights/CT_ThoraxOARs_SMITplus.safetensors`, after checking them against the SHA-256 checksum in `models.yaml`,
