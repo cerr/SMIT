@@ -14,6 +14,7 @@ Head and neck nodule segmentation on MR. Originally distributed as github.com/ce
 
 ## Notes
 
+- Predictions are mapped back to the original image grid by interpolating the class scores linearly before taking the label (the original used nearest neighbour), which gives smoother boundaries.
 - In the original repository the percentile normalization was a separate step (`preprocess.py`); here it is part of
   the pipeline, so raw MR images are given directly.
 - The original repository's `args_to_run.py` is a saved Box web page rather than the arguments file; the settings

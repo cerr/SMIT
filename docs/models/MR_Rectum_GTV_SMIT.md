@@ -16,7 +16,7 @@ Rectal cancer GTV on T2-weighted MR. Originally distributed as github.com/cerr/M
 ## Notes
 
 - Settings reproduce the original repository's `bash_run_SMIT_Segmentation.sh` (with its line-continuation bug
-  fixed, which had dropped `--out_channels` and every argument after it) and pyCERR's post-processing.
+  fixed, which had dropped `--out_channels` and every argument after it) and pyCERR's post-processing. Predictions are mapped back to the original image grid by interpolating the class scores linearly before taking the label (the original used nearest neighbour), which gives smoother boundaries.
 - `--largest_component` can be turned off on the command line by overriding the registry, e.g. to inspect the raw
   model output.
 

@@ -22,7 +22,7 @@ Thoracic organs at risk on CT and cone-beam CT (CBCT).
 ## Evaluation (CBCT)
 
 Internal evaluation on HyperSight CBCT scans (0.947 x 0.947 x 2.0 mm), Dice against clinical contours on the
-cases whose RTSTRUCT shares the CBCT frame of reference:
+cases whose RTSTRUCT shares the CBCT frame of reference: (Scored before 2026-10-23, when predictions were mapped back to the image grid with nearest neighbour; current results use linear interpolation and may differ slightly.)
 
 | Structure | Cases | Dice |
 |---|---|---|

@@ -18,7 +18,7 @@ Lung tumor gross tumor volume (GTV) on CT and cone-beam CT (CBCT).
 
 ## Evaluation (CBCT)
 
-Internal evaluation on 4 HyperSight CBCT cases, Dice against clinical GTV / iGTV contours: 0.00-0.78 (mean 0.31).
+Internal evaluation on 4 HyperSight CBCT cases, Dice against clinical GTV / iGTV contours: 0.00-0.78 (mean 0.31). (Scored before 2026-10-23, when predictions were mapped back to the image grid with nearest neighbour; current results use linear interpolation and may differ slightly.)
 The model gives false positives in consolidated lung and missed one lesion; treat CBCT results with caution.
 
 ## To be completed by the model owner

@@ -14,7 +14,7 @@ Whole-body anatomy on CT. Originally distributed as github.com/cerr/CT_WHOLEBODY
 
 ## Notes
 
-- Settings reproduce the original repository's `bash_run_SMIT_Segmentation.sh`, which resamples to 2.0 mm in z.
+- Settings reproduce the original repository's `bash_run_SMIT_Segmentation.sh`, which resamples to 2.0 mm in z. Predictions are mapped back to the original image grid by interpolating the class scores linearly before taking the label (the original used nearest neighbour), which gives smoother boundaries.
   The original checkpoint file is named `CT_WHOLEBODY_15_15_15.pt`, which suggests 1.5 mm; the model owner should
   confirm which spacing the model was trained with.
 

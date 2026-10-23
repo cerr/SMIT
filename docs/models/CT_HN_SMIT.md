@@ -15,7 +15,7 @@ Head and neck organs at risk on CT. Originally distributed as github.com/cerr/CT
 ## Notes
 
 - The original run script set `use_smit=1` and then overrode it with `use_smit=0`; the network is SMIT_Plus.
-- Settings reproduce the original repository's `bash_run_SMIT_Segmentation.sh`.
+- Settings reproduce the original repository's `bash_run_SMIT_Segmentation.sh`. Predictions are mapped back to the original image grid by interpolating the class scores linearly before taking the label (the original used nearest neighbour), which gives smoother boundaries.
 
 ## To be completed by the model owner
 
