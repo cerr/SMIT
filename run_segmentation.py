@@ -452,6 +452,14 @@ def apply_body_mask(seg_np, img_path, thresh=-150):
     return seg_np
 
 
+def label_dtype(max_label):
+    """Smallest unsigned integer type that holds label values 0..max_label (uint8 up to 255 labels)."""
+    for dt in (np.uint8, np.uint16, np.uint32):
+        if max_label <= np.iinfo(dt).max:
+            return dt
+    return np.uint64
+
+
 def apply_postprocessing(pred_t, args):
     if args.postproc == 'standard':
         return torch.argmax(pred_t, dim=0).to(torch.int64)
@@ -632,7 +640,9 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
                 batch["pred"] = batch["pred"].float()  # post-process in float32 (values unchanged)
 
                 b0 = [post_transforms(i) for i in decollate_batch(batch)][0]
-                seg_np = apply_postprocessing(b0["pred"].float(), args).cpu().numpy().astype(np.uint8)
+                # label map in the smallest unsigned type for this model's labels (uint8 for up to 255 labels)
+                seg_np = apply_postprocessing(b0["pred"].float(), args).cpu().numpy().astype(
+                    label_dtype(args.out_channels - 1))
                 if args.body_mask:
                     seg_np = apply_body_mask(seg_np, img_path)
                 if args.largest_component:
@@ -640,7 +650,9 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
 
                 affine = b0["image_meta_dict"].get("original_affine", np.eye(4))
                 out_file = os.path.join(output_directory, make_seg_filename(img_path))
-                nib.save(nib.Nifti1Image(seg_np, affine), out_file)
+                seg_img = nib.Nifti1Image(seg_np, affine)
+                seg_img.set_data_dtype(seg_np.dtype)  # store as that integer type, without scaling
+                nib.save(seg_img, out_file)
             except Exception as e:
                 print(f"\n[Rank {args.rank}] Error processing {img_path}: {e}")
                 status=-1
