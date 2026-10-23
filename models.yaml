@@ -75,7 +75,7 @@ models:
     status: validated
     description: Cardiac substructures (great vessels and chambers) on CT
     modality: CT
-    network: {arch: smit, depths: [2, 2, 8, 2], use_encoder5: false}
+    network: {arch: smit, depths: [2, 2, 12, 2], use_encoder5: false}
     out_channels: 10
     labels: {1: Aorta, 2: Pulmonary_Artery, 3: Pulmonary_Vein, 4: SVC, 5: IVC,
              6: Right_Atrium, 7: Right_Ventricle, 8: Left_Atrium, 9: Left_Ventricle}
