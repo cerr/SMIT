@@ -538,20 +538,60 @@ def make_seg_filename(path):
     return fname
 
 
-def mps_amp_compat(model):
-    """PyTorch on Apple GPUs (MPS) cannot run 3D transposed convolutions in float16/bfloat16.
-    Run those layers in float32 (mixed precision paused around them); everything else keeps float16."""
-    def fp32_forward(orig):
-        def forward(x, *a, **k):
-            with torch.autocast(device_type='mps', enabled=False):
-                return orig(x.float(), *a, **k)
-        return forward
-    n = 0
-    for m in model.modules():
-        if isinstance(m, torch.nn.ConvTranspose3d):
-            m.forward = fp32_forward(m.forward)
-            n += 1
-    return n
+class UpConv3d(torch.nn.Module):
+    """A ConvTranspose3d with kernel == stride and no padding, written as a 1x1x1 convolution to
+    out_channels * k^3 channels followed by a voxel shuffle. Same result; unlike ConvTranspose3d it also
+    runs in float16 on Apple GPUs (MPS)."""
+    def __init__(self, ct):
+        super().__init__()
+        self.cout, self.k = ct.out_channels, tuple(ct.kernel_size)
+        kd, kh, kw = self.k
+        self.conv = torch.nn.Conv3d(ct.in_channels, self.cout * kd * kh * kw, 1, bias=False)
+        w = ct.weight.detach()  # (in, out, kd, kh, kw) -> (out*kd*kh*kw, in, 1, 1, 1)
+        self.conv.weight.data = w.permute(1, 2, 3, 4, 0).reshape(-1, ct.in_channels, 1, 1, 1).clone()
+        self.bias = None if ct.bias is None else torch.nn.Parameter(ct.bias.detach().clone())
+
+    @staticmethod
+    def applies_to(ct):
+        return (tuple(ct.stride) == tuple(ct.kernel_size) and not any(ct.padding) and not any(ct.output_padding)
+                and ct.groups == 1 and all(d == 1 for d in ct.dilation))
+
+    def forward(self, x):
+        (kd, kh, kw), (n, _, d, h, w) = self.k, x.shape
+        y = self.conv(x).view(n, self.cout, kd, kh, kw, d, h, w)
+        y = y.permute(0, 1, 5, 2, 6, 3, 7, 4).reshape(n, self.cout, d * kd, h * kh, w * kw)
+        return y if self.bias is None else y + self.bias.view(1, -1, 1, 1, 1).to(y.dtype)
+
+
+class Float16Model(torch.nn.Module):
+    """Apple GPU (MPS): the whole model in float16 instead of float16 autocast. Autocast keeps float32 weights
+    plus float16 copies and, on MPS, needs the transposed convolutions in float32; for the large SMIT+ models
+    that peaked at 18 GB (heavy swapping on a 16 GB Mac). In float16: ~5 GB less, ~2.4x faster, same labels.
+    Transposed convolutions are rewritten (UpConv3d), normalization layers stay float32. Takes and returns
+    float32 tensors."""
+    def __init__(self, model):
+        super().__init__()
+        self.n_upconv = self.n_norm = self.n_fp32 = 0
+        for parent in list(model.modules()):
+            for name, child in list(parent.named_children()):
+                if isinstance(child, torch.nn.ConvTranspose3d) and UpConv3d.applies_to(child):
+                    setattr(parent, name, UpConv3d(child))
+                    self.n_upconv += 1
+        model.half()
+        keep_fp32 = (torch.nn.InstanceNorm3d, torch.nn.LayerNorm, torch.nn.GroupNorm, torch.nn.BatchNorm3d,
+                     torch.nn.ConvTranspose3d)  # any transposed conv left has no float16 kernel on MPS
+        for m in model.modules():
+            if isinstance(m, keep_fp32):
+                m.float()
+                m.forward = (lambda f: (lambda x, *a, **k: f(x.float(), *a, **k).to(x.dtype)))(m.forward)
+                if isinstance(m, torch.nn.ConvTranspose3d):
+                    self.n_fp32 += 1
+                else:
+                    self.n_norm += 1
+        self.model = model
+
+    def forward(self, x):
+        return self.model(x.half()).float()
 
 
 # Mixed precision: float16 on GPUs (CUDA, Apple MPS). The CPU runs float32: bfloat16 on the CPU was
@@ -634,8 +674,9 @@ def process_dataset(dataset_name, args, model, test_transform, post_transforms, 
             try:
                 val_inputs = batch["image"].to(device)
                 amp_dtype = get_amp_dtype(args, device)
+                use_autocast = amp_dtype is not None and not getattr(args, 'float16_model', False)
                 with torch.autocast(device_type=device.type, dtype=amp_dtype or torch.float32,
-                                    enabled=amp_dtype is not None):
+                                    enabled=use_autocast):
                     batch["pred"] = run_inference_with_tta(model, val_inputs, args)
                 batch["pred"] = batch["pred"].float()  # post-process in float32 (values unchanged)
 
@@ -705,10 +746,13 @@ def main():
     if is_main_process(args):
         print("Loading model...")
     model = load_model(args, device)
-    if device.type == 'mps' and get_amp_dtype(args, device) is not None:
-        n = mps_amp_compat(model)
+    args.float16_model = device.type == 'mps' and get_amp_dtype(args, device) is not None
+    if args.float16_model:
+        model = Float16Model(model).to(device)
         if is_main_process(args):
-            print(f"Apple GPU: {n} transposed-convolution layers run in float32 (no float16 support on MPS)")
+            print(f"Apple GPU: model runs in float16 ({model.n_upconv} transposed convolutions rewritten, "
+                  f"{model.n_norm} normalization layers in float32"
+                  + (f", {model.n_fp32} transposed convolutions in float32" if model.n_fp32 else "") + ")")
     test_transform, post_transforms = create_transforms(args)
     for n in args.datasets:
         status = process_dataset(n, args, model, test_transform, post_transforms, device)

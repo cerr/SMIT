@@ -125,6 +125,7 @@ class WindowAttention(nn.Module):
         else:
             attn = self.softmax(attn)
         attn = self.attn_drop(attn)
+        attn = attn.to(v.dtype)  # float32 mask/bias promote attn; match v (float16 model)
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
         x = self.proj(x)
