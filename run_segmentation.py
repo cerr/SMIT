@@ -409,7 +409,7 @@ def create_transforms(args):
         transforms.EnsureTyped(keys="pred"),
         transforms.Invertd(keys="pred", transform=test_transform, orig_keys="image",
                            meta_keys="pred_meta_dict", orig_meta_keys="image_meta_dict",
-                           meta_key_postfix="meta_dict", nearest_interp=True, to_tensor=True),
+                           meta_key_postfix="meta_dict", nearest_interp=False, to_tensor=True),
     ])
     return test_transform, post_transforms
 
