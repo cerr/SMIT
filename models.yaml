@@ -80,7 +80,7 @@ models:
     labels: {1: Aorta, 2: Pulmonary_Artery, 3: Pulmonary_Vein, 4: SVC, 5: IVC,
              6: Right_Atrium, 7: Right_Ventricle, 8: Left_Atrium, 9: Left_Ventricle}
     preprocessing: {hu_window: [-200, 300], spacing_mm: [1.0, 1.0, 3.0]}
-    inference: {blend: constant, overlap: 0.5, sw_batch_size: 4, amp: true, body_mask: true}
+    inference: {blend: constant, overlap: 0.5, sw_batch_size: 1, amp: true, body_mask: true}
     weights: {sha256: "617fd1f3194eeed05241101a80251260b131510e158c2d2ec415e6ae052b996c", version: "2026-02-10"}
     card: docs/models/CT_HeartSubstruct_SMIT.md
 
