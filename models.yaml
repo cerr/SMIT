@@ -140,7 +140,7 @@ models:
     labels: {1: GTV}
     preprocessing: {percentile_rescale: true, hu_window: [0, 800], spacing_mm: [1.0, 1.0, 1.0]}
     inference: {roi: [128, 128, 64], pad_mode: z_end, blend: gaussian, overlap: 0.5, sw_batch_size: 1, tta: true,
-                amp: false, body_mask: false}
+                amp: true, body_mask: false}
     postprocessing: {largest_component: true}
     weights: {sha256: "f81aadef532c1d2233c1e99b76dce47dc067c4a352f8dd143e425715245aa865", version: "3.0"}
     card: docs/models/MR_Rectum_GTV_SMIT.md

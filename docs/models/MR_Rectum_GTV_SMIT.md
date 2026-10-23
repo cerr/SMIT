@@ -8,7 +8,7 @@ Rectal cancer GTV on T2-weighted MR. Originally distributed as github.com/cerr/M
 | Output labels | 1 GTV |
 | Intensity | clipped at the 99.5th percentile and rescaled to 0-1000 (on the original grid), then window 0 to 800 scaled to [0, 1] |
 | Resampling | 1.0 x 1.0 x 1.0 mm, RAS orientation |
-| Inference | 128 x 128 x 64 patches, padded at the end in z, overlap 0.5, Gaussian blending, sliding-window batch 1, flip test-time augmentation, float32 |
+| Inference | 128 x 128 x 64 patches, padded at the end in z, overlap 0.5, Gaussian blending, sliding-window batch 1, flip test-time augmentation, mixed precision (the original ran float32; 4 voxels differed on the test case, Dice 0.9999) |
 | GPU memory | about 2.5 GB peak (Quadro RTX 5000, sliding-window batch 1) |
 | Post-processing | largest connected component of the GTV, holes filled (as in pyCERR's MR_Rectum_GTV_SMIT post-processing) |
 | Weights | `weights/MR_Rectum_GTV_SMIT.safetensors`, installed with `get_weights.py` (checksum in `models.yaml`) |
